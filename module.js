@@ -2,81 +2,6 @@ const fs = require("fs");
 const path = require("path");
 const process = require("process");
 
-// {
-//     xxx: {
-
-//     }
-// }
-
-// function parseImport(str, moduleRootPath) {
-//     const importData = {};
-
-//     const stateMatchResult = str.match(/^\s*import\s+([("'])/);
-//     const signStart = stateMatchResult && stateMatchResult[1];
-//     let signEnd = signStart; 
-//     if (signStart == "(") {
-//         signEnd = ")";
-//     }
-//     const importContentStartIndex = stateMatchResult.index + stateMatchResult[0].length;
-//     const signEndIndex = str.indexOf(signEnd, importContentStartIndex);
-//     const importContent = str.slice(importContentStartIndex, signEndIndex);
-
-//     if (signStart == "(") {
-
-//     } else {
-
-//     }
-// }
-
-/**
- * 包与代码映射
- * @param {String} moduleRootPath 
- * @param {Array<String>} fileContents 
- */
-function parseModule_delete(moduleRootPath, fileContents) {
-    const modules = {};
-    fileContents.forEach(content => {
-        const packageMatchResult = content.match(/^\s*package\s+(\S+)/);
-        const packageName = packageMatchResult && packageMatchResult[1];
-        if (packageName) {
-            const codeObject = { code: "", depend: [] };
-            content = content.slice(packageMatchResult.index + packageMatchResult[0].length);
-
-            // TODO import 别名
-            const importMatchResult = content.match(/^\s*import\s+\(([^)]+)/);
-            const importSingleMathResult = content.match(/^\s*import\s+("[^"]+)/)
-            const importResult = importMatchResult || importSingleMathResult;
-            if (importResult && importResult[1]) {
-                importResult[1].split("\n").forEach((moduleName) => {
-                    const index = moduleName.indexOf(moduleRootPath);
-                    if (~index) {
-                        let name = moduleName.slice(index + moduleRootPath.length);
-                        if (name[0] == "/") name = name.slice(1);
-                        if (name.endsWith('"')) name = name.slice(0, name.length - 1);
-                        codeObject.depend.push(name);
-                    }
-                });
-                content = content.slice(importResult.index + importResult[0].length);
-            }
-
-            codeObject.code = content;
-            if (!modules[packageName]) modules[packageName] = [];
-            modules[packageName].push(codeObject);
-        }
-    });
-
-    fs.writeFileSync(path.join(process.cwd(), "1.json"), JSON.stringify(modules, null, 2));
-}
-
-
-function parsePackage(code) {
-    const packageMatchResult = code.match(/^\s*package\s+(\S+)/);
-    if (packageMatchResult && packageMatchResult[1]) {
-        return packageMatchResult[1];
-    }
-}
-
-// const importBlockRegexp = /^package\s+\w+\s*((?:^\s*import\s*(?:\w*\s*"[^"]+"|\([^)]+\))\s*)+)/;
 
 function parseModule(code, filePath) {
     const importBlockRegexp = /^\s*package\s+(\S+)\s*((?:^\s*import\s*(?:\w*\s*"[^"]+"|\([^)]+\))\s*)+)?/m;
@@ -103,6 +28,42 @@ function parseModule(code, filePath) {
     }
 }
 
+// 暂不支持变量结构体声明
+// 不支持匿名函数声明
+function parseState(code) {
+    const funcRegexp = /^\s*func\s*(\([^)]+\))?\s*([^(]+)\s*\(([^)]*)\)\s*(\([^)]+\)|[^{]+)?/mg;
+    const structRegexp = /^\s*type\s+(\S+)\s+struct/mg;
+
+    const state = {};
+    while (1) {
+        const funcMatchResult = funcRegexp.exec(code);
+        if (!funcMatchResult) break;
+
+        const receive = funcMatchResult[1];
+        const funcName = funcMatchResult[2];
+        const parameter = funcMatchResult[3];
+        const returnState = funcMatchResult[4];
+        if (!state[funcName]) state[funcName] = [];
+        const funcData = {type: "func", isParse: false, receive, parameter, returnState, contentBegin: funcMatchResult.index + funcMatchResult[0].length};
+        state[funcName].push(funcData);
+    }
+
+    while (1) {
+        const structMatchResult = structRegexp.exec(code);
+        if (!structMatchResult) break;
+
+        const structName = structMatchResult[1];
+        state[structName] = {
+            type: "struct",
+            isParse: false,
+            contentBegin: structMatchResult.index + structMatchResult[0].length
+        }
+    }
+
+    return state;
+}
+
 module.exports = {
     parseModule,
+    parseState
 }

@@ -2,8 +2,11 @@ const fs = require("fs");
 const path = require("path");
 
 const { readAllGoFile } = require("./file");
-const { parseModule } = require("./module");
+const { parseModule, parseState } = require("./module");
 const { removeCommentContent } = require("./utils");
+
+const ginPackage = "github.com/gin-gonic/gin";
+const gorm = "github.com/jinzhu/gorm";
 
 // TODO 命令行输入要生成文档的项目地址
 const projectPath = path.join("../go-gin-example");
@@ -35,28 +38,28 @@ readAllGoFile(projectPath, excludePaths).then(files => {
         file.path = file.path.replace(projectPath, moduleRootPath).replace(/\\/g, "/");
         const importState = file.path.slice(0, file.path.lastIndexOf("/"));
         file.content = removeCommentContent(file.content);  // 去掉代码注释
-    
+
         const moduleData = parseModule(file.content, file.path);
-        
+
         if (!modules[importState]) modules[importState] = { packageName: moduleData.packageName, code: [] };
-        
-        
+
+
         if (moduleData.packageName != modules[importState].packageName) {
             throw new Error("同一目录下只能存在一个package\n" + file.path);
         }
 
-        modules[importState].code.push({importStates: moduleData.importStates, content: file.content.slice(moduleData.lastIndex), state: {}});
+        modules[importState].code.push({ importStates: moduleData.importStates, content: file.content.slice(moduleData.lastIndex), state: {}, filePath: file.path });
     });
-    
+
     let mainPackage = null;
 
     Object.values(modules).forEach(moduleObj => {
         moduleObj.code.forEach(codeData => {
-            for(let importState in codeData.importStates) {
+            for (let importState in codeData.importStates) {
                 if (modules[importState]) {
                     codeData.importStates[importState] = modules[importState].packageName;
                 } else {
-                    // 去掉非本地模块
+                    // 去掉非本地模块(注意写死的部分gin等)
                     codeData.importStates[importState] = "";
                 }
             }
@@ -64,12 +67,26 @@ readAllGoFile(projectPath, excludePaths).then(files => {
         if (moduleObj.packageName == "main") {
             mainPackage = moduleObj;
         }
+    });
+
+    mainPackage.code.forEach(codeData => {
+        for (let importState in codeData.importStates) {
+            if (modules[importState]) {
+                modules[importState].code.forEach(_codeData => {
+                    _codeData.state = parseState(_codeData.content);
+                    delete _codeData.content;
+                })
+                console.log(JSON.stringify( modules[importState], null, 2));
+            }
+        }
+        codeData.state = parseState(codeData.content);
+        delete codeData.content;
     })
 
     console.log(JSON.stringify(mainPackage, null, 2));
 
-    
-    
+
+
     // console.log(JSON.stringify(modules, null, 2));
 })
 
