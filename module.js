@@ -68,6 +68,16 @@ function parseModule(moduleRootPath, fileContents) {
     fs.writeFileSync(path.join(process.cwd(), "1.json"), JSON.stringify(modules, null, 2));
 }
 
+
+
+function parsePackage(code) {
+    const packageMatchResult = code.match(/^\s*package\s+(\S+)/);
+    if (packageMatchResult && packageMatchResult[1]) {
+        return packageMatchResult[1];
+    }
+}
+
 module.exports = {
-    parseModule
+    parseModule,
+    parsePackage
 }

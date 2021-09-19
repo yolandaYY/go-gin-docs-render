@@ -23,7 +23,7 @@ function readAllFile(root, excludePaths, callback) {
                 readFileTasks.push(new Promise((resolve, reject) => {
                     fs.readFile(_path, "utf8", function (err, data) {
                         if (err) reject(err);
-                        resolve(data);
+                        resolve({content: data, path: _path});
                     })
                 }));
             }

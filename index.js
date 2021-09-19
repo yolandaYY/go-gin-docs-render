@@ -2,11 +2,12 @@ const fs = require("fs");
 const path = require("path");
 
 const { readAllFile } = require("./file");
-const { parseModule } = require("./module");
+const { parsePackage } = require("./module");
+const { removeCommentContent } = require("./utils");
 
 // TODO 命令行输入要生成文档的项目地址
-const projectPath = "../go-gin-example";
-
+const projectPath = path.join("../go-gin-example");
+console.log(projectPath);
 const excludePaths = [path.join(projectPath, "vendor")];
 
 let moduleRootPath = "";
@@ -28,9 +29,21 @@ try {
 const modules = {};
 
 // TODO reject
-readAllFile(projectPath, excludePaths).then((files) => {
-    parseModule(moduleRootPath, files)
-}).then(() => {
-    // console.log(modules);
-});
+readAllFile(projectPath, excludePaths).then(files => {
+    files.forEach(file => {
+        file.path = file.path.replace(projectPath, moduleRootPath).replace(/\\/g, "/");
+        const importState = file.path.slice(0, file.path.lastIndexOf("/"));
+        file.content = removeCommentContent(file.content);  // 去掉代码注释
+    
+        const packageName = parsePackage(file.content);
+        if (!modules[importState]) modules[importState] = { packageName, code: [] };
+
+
+        if (packageName != modules[importState].packageName) {
+            throw new Error("同一目录下只能存在一个package");
+        }
+
+    });
+    console.log(modules);
+})
 
