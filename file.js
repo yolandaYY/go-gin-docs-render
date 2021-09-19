@@ -7,7 +7,7 @@ const path = require("path");
  * @param {Array} excludePaths 排除地址，不读
  * @param {Function} callback 
  */
-function readAllFile(root, excludePaths, callback) {
+function readAllGoFile(root, excludePaths, callback) {
     const stack = [root];
     const readFileTasks = [];
     while (!!stack.length) {
@@ -34,5 +34,5 @@ function readAllFile(root, excludePaths, callback) {
 }
 
 module.exports = {
-    readAllFile
+    readAllGoFile: readAllGoFile
 }
