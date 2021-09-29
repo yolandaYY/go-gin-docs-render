@@ -2,14 +2,18 @@ const fs = require("fs");
 const path = require("path");
 
 const { readAllGoFile } = require("./file");
-const { parseModule, parseState } = require("./module");
-const { removeCommentContent } = require("./utils");
+const { parseModule, parseState, parseImportState } = require("./module");
+const { removeCommentContent, matchBlock } = require("./utils");
+const { invoke, parseFuncContent, findNameByValue, parseObject } = require("./type");
+const { parseRoute } = require("./router");
 
-const ginPackage = "github.com/gin-gonic/gin";
-const gorm = "github.com/jinzhu/gorm";
+
+const GIN = "github.com/gin-gonic/gin";
+const GORM = "github.com/jinzhu/gorm";
+const NET = "net/http";
 
 // TODO 命令行输入要生成文档的项目地址
-const projectPath = path.join("../go-gin-example");
+const projectPath = path.join("D:\\goproject\\src\\go-gin-example");
 console.log(projectPath);
 const excludePaths = [path.join(projectPath, "vendor")];
 
@@ -32,12 +36,15 @@ try {
 
 const modules = {};
 
+
 // TODO reject
 readAllGoFile(projectPath, excludePaths).then(files => {
+    // 整理模块
     files.forEach(file => {
         file.path = file.path.replace(projectPath, moduleRootPath).replace(/\\/g, "/");
         const importState = file.path.slice(0, file.path.lastIndexOf("/"));
         file.content = removeCommentContent(file.content);  // 去掉代码注释
+        file.content = file.content.replace(/\s*([\({,:\.])\s+/g, "$1"); // 去掉多余的空格
 
         const moduleData = parseModule(file.content, file.path);
 
@@ -48,45 +55,73 @@ readAllGoFile(projectPath, excludePaths).then(files => {
             throw new Error("同一目录下只能存在一个package\n" + file.path);
         }
 
-        modules[importState].code.push({ importStates: moduleData.importStates, content: file.content.slice(moduleData.lastIndex), state: {}, filePath: file.path });
+        modules[importState].code.push({ importStates: moduleData.importStates, content: file.content.slice(moduleData.lastIndex), states: false, filePath: file.path });
     });
 
     let mainPackage = null;
+    let mainModuleName = "";
+    
+    for (let moduleName in modules) {
+        if (modules[moduleName].packageName == "main") {
+            mainPackage = modules[moduleName];
+            mainModuleName = moduleName;
 
-    Object.values(modules).forEach(moduleObj => {
-        moduleObj.code.forEach(codeData => {
-            for (let importState in codeData.importStates) {
-                if (modules[importState]) {
-                    codeData.importStates[importState] = modules[importState].packageName;
-                } else {
-                    // 去掉非本地模块(注意写死的部分gin等)
-                    codeData.importStates[importState] = "";
+            mainPackage.code.forEach(codeData => {
+                Object.assign(codeData, parseState(codeData.content));
+            })
+        }
+    }
+
+    parseImportState(modules, mainPackage.code);
+
+
+    // 如果main包引入NET包，就搜索一下有没有初始化.Server
+    for (let i = 0; i < mainPackage.code.length; ++i) {
+        const codeData = mainPackage.code[i];
+        if (NET in codeData.importStates) {
+            const packageName = codeData.importStates[NET] || "http";   // NET包引入的名称
+            // 规定main函数一定会声明一个变量存放server
+            if (codeData.states.main) {
+                const mainFunc = codeData.states.main;
+                const funcData = parseFuncContent(codeData.content.slice(mainFunc.begin, mainFunc.end));
+                mainFunc.isParse = true;
+                mainFunc.funcData = funcData;
+
+                // 假设开始
+                const server = findNameByValue(funcData.state, `&${packageName}.Server`);
+                if (~codeData.content.indexOf(server.name + ".ListenAndServe")) {
+                    const serverObj = parseObject(codeData.content, server.data.index);
+                    if (serverObj.Handler && funcData.state[serverObj.Handler]) {
+                        const routerValue = funcData.state[serverObj.Handler];
+                        console.log(routerValue);
+
+                        if (!routerValue.type) {    // TODO 同一函数内未处理
+                            const invokeData = invoke(modules, mainModuleName, i, "main", routerValue.value);
+                            if (invokeData) {
+                                if (invokeData.type == "func" && invokeData.returnState == "*gin.Engine") {
+                                    const _moduleName = invokeData.moduleName || mainModuleName;
+                                    const _codeIndex = invokeData.codeIndex == undefined ? i : invokeData.codeIndex;
+                                    if (!invokeData.isParse) {
+                                        invokeData.funcData = parseFuncContent(modules[_moduleName].code[_codeIndex].content.slice(invokeData.begin + 1, invokeData.end));
+                                        invokeData.isParse = true;
+                                    }
+                                    invokeData.moduleName && parseImportState(modules, modules[invokeData.moduleName].code);
+                                    parseRoute(modules, _moduleName, _codeIndex, invokeData);
+                                }
+                            }
+
+                        }
+                        // TODO
+                    }
                 }
-            }
-        });
-        if (moduleObj.packageName == "main") {
-            mainPackage = moduleObj;
-        }
-    });
 
-    mainPackage.code.forEach(codeData => {
-        for (let importState in codeData.importStates) {
-            if (modules[importState]) {
-                modules[importState].code.forEach(_codeData => {
-                    _codeData.state = parseState(_codeData.content);
-                    delete _codeData.content;
-                })
-                console.log(JSON.stringify( modules[importState], null, 2));
+                break;
             }
         }
-        codeData.state = parseState(codeData.content);
-        delete codeData.content;
-    })
+    }
 
-    console.log(JSON.stringify(mainPackage, null, 2));
+    // console.log(JSON.stringify(modules, null, 2))
 
 
-
-    // console.log(JSON.stringify(modules, null, 2));
 })
 

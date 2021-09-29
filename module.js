@@ -1,6 +1,8 @@
 const fs = require("fs");
 const path = require("path");
 const process = require("process");
+const { matchBlock } = require("./utils");
+const { parseVarState, parseConstState } = require("./type");
 
 
 function parseModule(code, filePath) {
@@ -28,24 +30,58 @@ function parseModule(code, filePath) {
     }
 }
 
-// 暂不支持变量结构体声明
-// 不支持匿名函数声明
+// 不支持map
+// 不支持 type name type
+// 不支持函数声明返回值是函数(括号问题未解决)
 function parseState(code) {
     const funcRegexp = /^\s*func\s*(\([^)]+\))?\s*([^(]+)\s*\(([^)]*)\)\s*(\([^)]+\)|[^{]+)?/mg;
     const structRegexp = /^\s*type\s+(\S+)\s+struct/mg;
 
+    let str = code;
     const state = {};
+    const receiver = {};
     while (1) {
         const funcMatchResult = funcRegexp.exec(code);
         if (!funcMatchResult) break;
 
         const receive = funcMatchResult[1];
         const funcName = funcMatchResult[2];
-        const parameter = funcMatchResult[3];
+        let parameter = {};
+        if (funcMatchResult[3]) {
+            // TODO 省略声明（用后者）
+            funcMatchResult[3].split(",").forEach(_str => {
+                const result = _str.match(/^\s*(\S+)/);
+                const _type = _str.slice(result.index + 1).trim()
+                // type与value用一样的值是因为方便用查找函数
+                parameter[result[1]] = {
+                    type: _type,
+                    value: _type,
+                }
+            });
+        }
         const returnState = funcMatchResult[4];
-        if (!state[funcName]) state[funcName] = [];
-        const funcData = {type: "func", isParse: false, receive, parameter, returnState, contentBegin: funcMatchResult.index + funcMatchResult[0].length};
-        state[funcName].push(funcData);
+        const contentBegin = funcMatchResult.index + funcMatchResult[0].length;
+        const block = matchBlock(code, "{", "}", true, contentBegin);
+        if (receive) {
+            // TODO 暂时不区分值还是引用
+            const receiveResult = receive.match(/\(\s*(\S+)\s+(\S+)\s*\)/);
+            if (receiveResult) {
+                if (!receiver[receiveResult[2]]) {
+                    receiver[receiveResult[2]] = {};
+                }
+                receiver[receiveResult[2]][funcName] = {
+                    isParse: false, receiveName: receiveResult[1], parameter, returnState,
+                    begin: block.begin, end: block.end, name: funcName
+                }
+
+            }
+        } else {
+            state[funcName] = {
+                type: "func", isParse: false, parameter, returnState,
+                begin: block.begin, end: block.end, name: funcName
+            };
+        }
+        str = str.slice(0, funcMatchResult.index) + " ".repeat(block.end - funcMatchResult.index + 1) + str.slice(block.end + 1);
     }
 
     while (1) {
@@ -53,17 +89,48 @@ function parseState(code) {
         if (!structMatchResult) break;
 
         const structName = structMatchResult[1];
+        const contentBegin = structMatchResult.index + structMatchResult[0].length;
+        const block = matchBlock(code, "{", "}", true, contentBegin);
+
         state[structName] = {
             type: "struct",
             isParse: false,
-            contentBegin: structMatchResult.index + structMatchResult[0].length
+            begin: block.begin, end: block.end
         }
+        str = str.slice(0, structMatchResult.index) + " ".repeat(block.end - structMatchResult.index + 1) + str.slice(block.end + 1);
+        // console.log(parseStruct(code.slice(block.begin + 1, block.end)));
     }
+    const varState = parseVarState(str, true);
+    const constState = parseConstState(str);
 
-    return state;
+    return { receiver, states: Object.assign({}, varState, constState, state) };
 }
+
+
+// 处理import引入模块的名称与依赖
+function parseImportState(modules, codes) {
+    Object.values(modules).forEach(moduleObj => {
+        moduleObj.code.forEach(codeData => {
+            for (let importState in codeData.importStates) {
+                if (modules[importState]) {
+                    codeData.importStates[importState] = modules[importState].packageName;
+                    modules[importState].code.forEach(_codeData => {
+                        if(!_codeData.states) {
+                            Object.assign(_codeData, parseState(_codeData.content));
+                        }
+                    })
+                } else {
+                    // TODO 去掉非本地模块(注意写死的部分gin等)(还有_.等特殊别名)
+                    codeData.importStates[importState] = "";
+                }
+            }
+        });
+    });
+}
+
 
 module.exports = {
     parseModule,
-    parseState
+    parseState,
+    parseImportState
 }
