@@ -49,29 +49,34 @@ function parseState(code) {
         let parameter = {};
         if (funcMatchResult[3]) {
             // TODO 省略声明（用后者）
-            funcMatchResult[3].split(",").forEach(_str => {
-                const result = _str.match(/^\s*(\S+)/);
-                const _type = _str.slice(result.index + 1).trim()
-                // type与value用一样的值是因为方便用查找函数
-                parameter[result[1]] = {
+            const arr = funcMatchResult[3].split(",");
+            let _type = "";
+            for (let i = arr.length - 1; i >= 0; --i) {
+                const _result = arr[i].match(/^\s*(\S+)/);
+                const type = arr[i].slice(_result[0].length).trim();
+                _type = type || _type;
+                parameter[_result[1]] = {
                     type: _type,
                     value: _type,
+                    isParameter: true,
+                    order: i,
                 }
-            });
+
+            }
         }
         const returnState = funcMatchResult[4];
         const contentBegin = funcMatchResult.index + funcMatchResult[0].length;
         const block = matchBlock(code, "{", "}", true, contentBegin);
         if (receive) {
             // TODO 暂时不区分值还是引用
-            const receiveResult = receive.match(/\(\s*(\S+)\s+(\S+)\s*\)/);
+            const receiveResult = receive.match(/\(\s*(\S+)\s+\*?(\S+)\s*\)/);
             if (receiveResult) {
                 if (!receiver[receiveResult[2]]) {
                     receiver[receiveResult[2]] = {};
                 }
                 receiver[receiveResult[2]][funcName] = {
                     isParse: false, receiveName: receiveResult[1], parameter, returnState,
-                    begin: block.begin, end: block.end, name: funcName
+                    begin: block.begin, end: block.end, name: funcName, type: "receiver"
                 }
 
             }
@@ -95,6 +100,7 @@ function parseState(code) {
         state[structName] = {
             type: "struct",
             isParse: false,
+            name: structName,
             begin: block.begin, end: block.end
         }
         str = str.slice(0, structMatchResult.index) + " ".repeat(block.end - structMatchResult.index + 1) + str.slice(block.end + 1);

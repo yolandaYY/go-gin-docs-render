@@ -30,9 +30,12 @@ function parseStruct(str) {
             line.split(",").forEach(name => {
                 // 包之间的结构体引用
                 if (name) {
+                    const comment = commentResult && commentResult[0].trim();
+                    const jsonResult = comment && comment.match(/json\s*:\s*"([^"]+)/)
                     structData[name] = {
                         type: typeResult[0].trim(),
-                        comment: commentResult && commentResult[0].trim()
+                        comment: jsonResult ? comment.slice(jsonResult.index + jsonResult[0].length + 1) : comment,
+                        json: jsonResult && jsonResult[1],
                     }
                 } else {
                     structData[typeResult[0].trim()] = "IMPORT";
@@ -324,6 +327,8 @@ function parseBasicType(value) {
 
 
 function findNameByValue(states, keyWord) {
+    if (typeof keyWord == "string")
+        keyWord = keyWord.trim();
     for (let name in states) {
         if (states[name].value) {
             if ((typeof keyWord == "string" && ~states[name].value.indexOf(keyWord))
@@ -333,9 +338,32 @@ function findNameByValue(states, keyWord) {
     }
 }
 
+function findFuncInnerStateInPackage(modules, moduleName, codeIndex, funcState, name) {
+    const funcBlockData = funcState.funcBlockData;
+
+    // 函数内
+    if (funcBlockData.state[name]) {
+        return funcBlockData.state[name];
+    }
+    // 参数
+    if (funcState.parameter[name]) {
+        return funcState.parameter[name];
+    }
+    // 文件内
+    if (modules[moduleName].code[codeIndex].states[name]) {
+        return modules[moduleName].code[codeIndex].states[name];
+    }
+    // 包内
+    const index = findNameStateInPackage(modules[moduleName].code, name);
+
+    if (~index) {
+        return modules[moduleName].code[index].states[name];
+    }
+}
+
 
 /**
- * 返回code数组下标(TODO 未对函数参数进行查找)
+ * 返回code数组下标
  * @param {*} packageCodes 
  * @param {*} state 
  * @returns 
@@ -365,41 +393,65 @@ function findNameStateInImport(modules, moduleName, codeIndex, name, property) {
     return stateData;
 }
 
+
 /**
  * 返回被调用函数或结构体(TODO 添加返回值用于快速查找)
  * @param {string} modules 
  * @param {string} moduleName 
  * @param {number} codeIndex 
- * @param {any} funcData 
+ * @param {any} funcBlockData 
  * @param {string} invokeState 
  * @returns
  */
 function invoke(modules, moduleName, codeIndex, funcName, invokeState) {
-    const result = invokeState.match(/([^\.\s]+)\.([^\(\{\s)]+)/);
+    const result = invokeState.match(/([^\.\s{=]+)\.([^\(\{\s)]+)/);
     if (!result) return;
 
     const name = result[1];
     const property = result[2];
     const funcState = modules[moduleName].code[codeIndex].states[funcName];
-    const funcData = funcState.funcData;
+    const funcBlockData = funcState.funcBlockData;
 
     let stateData;
-    // 函数内
-    if (funcData.state[name]) stateData = funcData.state[name];
-    // 函数参数
-    if (funcState.parameter[name]) {
-        stateData = funcState.parameter[name];
+    // 函数内(TODO 只对结构体做处理) // TODO 结构体声明不一定和receiver在同一文件！！！
+    if (funcBlockData.state[name] && funcBlockData.state[name].type == "struct") {
+        const structData = funcBlockData.state[name].structData;
+        stateData = modules[structData.moduleName || moduleName].code[structData.codeIndex
+            == undefined ? codeIndex : structData.codeIndex].receiver[structData.name][property];
+    }
+    // 函数参数 (TODO !!! 参数要做类型连接)
+    if (!stateData && funcState.parameter[name]) {
+        const _state = funcState.parameter[name];
+        if (_state.type[0] == "*") _state.type = _state.type.slice(1);
+        // TODO （或许receiver应该属于外层，或者添加一层在外面方便查找）
+        if (modules[moduleName].code[codeIndex].receiver[_state.type] && modules[moduleName].code[codeIndex].receiver[_state.type][property]) {
+            stateData = modules[moduleName].code[codeIndex].receiver[_state.type][property];
+            if (!stateData) {
+                const _index = findNameStateInPackage(modules[modules].code, _state.type);
+                if (~_index) {
+                    stateData = modules[moduleName].code[_index].receiver[_state.type][property];
+                }
+            }
+
+        }
     }
     // 文件内
-    if (!stateData) stateData = modules[moduleName].code[codeIndex].states[name];
-    // receiver TODO!!!
-    // if(!stateData) stateData = 
+    if (!stateData && modules[moduleName].code[codeIndex].states[name]) {
+        let _state = modules[moduleName].code[codeIndex].states[name];
+        if (_state.type == "struct" && modules[moduleName].code[codeIndex].receiver[_state.name]) {
+            stateData = modules[moduleName].code[codeIndex].receiver[_state.name][property];
+        }
+    }
 
     if (!stateData) {
         // 包内
         const otherCodeIndex = findNameStateInPackage(modules[moduleName].code, name);
         if (~otherCodeIndex) {
-            stateData = modules[moduleName].code[otherCodeIndex].states[name];
+            const _state = modules[moduleName].code[otherCodeIndex].states[name];
+            if (_state.type == "struct" && modules[moduleName].code[otherCodeIndex].receiver[_state.name]) {
+                stateData = modules[moduleName].code[otherCodeIndex].receiver[_state.name][property];
+                stateData.codeIndex = otherCodeIndex;
+            }
         } else {   // 其他包
             if (property[0] != property[0].toUpperCase()) return;
 
@@ -407,6 +459,43 @@ function invoke(modules, moduleName, codeIndex, funcName, invokeState) {
         }
     }
     return stateData;
+}
+
+// a.b(parameter)
+function parseParameter(str) {
+    const structStack = [];
+    const structRegexp = /([^,{]+){/g;
+    while (1) {
+        const result = structRegexp.exec(str);
+        if (!result) break;
+
+        const pos = matchBlock(str, "{", "}", true, result.index);
+        const _obj = parseObject(str, pos.begin);
+        const _objStr = str.slice(result.index, pos.end);
+        str = str.slice(0, result.index) + "__STRUCT_STACK__" + structStack.length + str.slice(pos.end + 1);
+        structStack.push({
+            name: result[1].trim(),
+            type: "struct",
+            obj: _obj,
+            _objStr,
+        });
+    }
+
+    const params = [];
+
+    str.split(",").forEach(property => {
+        const _result = property.match(/__STRUCT_STACK__(\d+)/);
+        if (_result) {
+            params.push(structStack[_result[1]]);
+        } else {
+            params.push({
+                name: property,
+            })
+        }
+    })
+
+    return params;
+
 }
 
 
@@ -418,5 +507,7 @@ module.exports = {
     parseFuncContent,
     findNameByValue,
     parseObject,
-    invoke
+    invoke,
+    parseParameter,
+    findFuncInnerStateInPackage
 }

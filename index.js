@@ -83,16 +83,16 @@ readAllGoFile(projectPath, excludePaths).then(files => {
             // 规定main函数一定会声明一个变量存放server
             if (codeData.states.main) {
                 const mainFunc = codeData.states.main;
-                const funcData = parseFuncContent(codeData.content.slice(mainFunc.begin, mainFunc.end));
+                const funcBlockData = parseFuncContent(codeData.content.slice(mainFunc.begin, mainFunc.end));
                 mainFunc.isParse = true;
-                mainFunc.funcData = funcData;
+                mainFunc.funcBlockData = funcBlockData;
 
                 // 假设开始
-                const server = findNameByValue(funcData.state, `&${packageName}.Server`);
+                const server = findNameByValue(funcBlockData.state, `&${packageName}.Server`);
                 if (~codeData.content.indexOf(server.name + ".ListenAndServe")) {
                     const serverObj = parseObject(codeData.content, server.data.index);
-                    if (serverObj.Handler && funcData.state[serverObj.Handler]) {
-                        const routerValue = funcData.state[serverObj.Handler];
+                    if (serverObj.Handler && funcBlockData.state[serverObj.Handler]) {
+                        const routerValue = funcBlockData.state[serverObj.Handler];
                         console.log(routerValue);
 
                         if (!routerValue.type) {    // TODO 同一函数内未处理
@@ -102,7 +102,7 @@ readAllGoFile(projectPath, excludePaths).then(files => {
                                     const _moduleName = invokeData.moduleName || mainModuleName;
                                     const _codeIndex = invokeData.codeIndex == undefined ? i : invokeData.codeIndex;
                                     if (!invokeData.isParse) {
-                                        invokeData.funcData = parseFuncContent(modules[_moduleName].code[_codeIndex].content.slice(invokeData.begin + 1, invokeData.end));
+                                        invokeData.funcBlockData = parseFuncContent(modules[_moduleName].code[_codeIndex].content.slice(invokeData.begin + 1, invokeData.end));
                                         invokeData.isParse = true;
                                     }
                                     invokeData.moduleName && parseImportState(modules, modules[invokeData.moduleName].code);
