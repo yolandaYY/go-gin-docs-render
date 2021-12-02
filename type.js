@@ -11,7 +11,7 @@ function parseObject(str, startIndex) {
     while (1) {
         const result = regexp.exec(str);
         if (!result) return obj;
-        obj[result[1]] = result[2];
+        obj[result[1].replace(/["']/g, "")] = result[2];
     }
 }
 
@@ -19,7 +19,7 @@ function parseObject(str, startIndex) {
 function parseStruct(str) {
     const structData = {};
     str.split(/[;\n]/).forEach(line => {
-        const commentResult = line.match(/`[^`]+`\s*$/);
+        const commentResult = line.match(/`([^`]+)`\s*$/);
         if (commentResult) {
             line = line.slice(0, commentResult.index);
         }
@@ -30,11 +30,12 @@ function parseStruct(str) {
             line.split(",").forEach(name => {
                 // 包之间的结构体引用
                 if (name) {
-                    const comment = commentResult && commentResult[0].trim();
-                    const jsonResult = comment && comment.match(/json\s*:\s*"([^"]+)/)
+                    let comment = commentResult && commentResult[1].trim();
+                    const jsonResult = comment && comment.match(/json\s*:\s*"([^"]+)"/)
+                    comment = (comment || "").replace(jsonResult && jsonResult[0], "")
                     structData[name] = {
                         type: typeResult[0].trim(),
-                        comment: jsonResult ? comment.slice(jsonResult.index + jsonResult[0].length + 1) : comment,
+                        comment: comment,
                         json: jsonResult && jsonResult[1],
                     }
                 } else {
@@ -473,23 +474,24 @@ function parseParameter(str) {
         const _obj = parseObject(str, pos.begin);
         const _objStr = str.slice(result.index, pos.end);
         str = str.slice(0, result.index) + "__STRUCT_STACK__" + structStack.length + str.slice(pos.end + 1);
+        const name = result[1].trim()
         structStack.push({
-            name: result[1].trim(),
-            type: "struct",
+            name,
+            type: name.match(/map\[|gin\.H/) ? "map" : "struct",
             obj: _obj,
             _objStr,
         });
     }
-
+    
     const params = [];
-
+    
     str.split(",").forEach(property => {
         const _result = property.match(/__STRUCT_STACK__(\d+)/);
         if (_result) {
             params.push(structStack[_result[1]]);
         } else {
             params.push({
-                name: property,
+                name: property.replace(/["']/g, ""),
             })
         }
     })

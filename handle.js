@@ -10,7 +10,7 @@ const keyWords = {
 
 // TODO 转义
 function contextRegexp(contextName) {
-    return new RegExp(`[=\\s;{]${contextName}\\.([^(\\s]+)\\s*\\(`, "g");
+    return new RegExp(`[=\\s;{\(]${contextName}\\.([^(\\s]+)\\s*\\(`, "g");
 }
 
 function isGinContext(str) {
@@ -74,15 +74,15 @@ function parseHandle(modules, moduleName, codeIndex, funcData) {
         while (1) {
             let result = regexp.exec(content);
             if (!result) break;
-
             const method = result[1].trim();
 
-            const block = matchBlock(content, "(", ")", true, result.index);
+            const block = matchBlock(content, "(", ")", true, result.index + (result[0][0] == "(" ? 1 : 0));
             const invokeParameters = parseParameter(content.slice(block.begin + 1, block.end));
 
             if (keyWords[method]) {
                 if (!handle[method]) handle[method] = [];
                 handle[method].push(invokeParameters);
+                // console.log(method);
             } else {
                 const invokeData = invoke(modules, moduleName, codeIndex, funcData.name, result[0]);
                 if (invokeData && invokeData.type == "receiver" && state.structData && state.structData.ginProperty) {
@@ -104,28 +104,34 @@ function parseHandle(modules, moduleName, codeIndex, funcData) {
                         const ginParameters = parseParameter(_content.slice(_block.begin + 1, _block.end));
                         if (keyWords[_method]) {
                             // 变量解析、加表
-                            // console.log(invokeData, invokeParameters, method, ginParameters);
+                            // console.log("->", invokeData, invokeParameters, method, ginParameters);
                             // console.log(_method);
                             const params = [];
                             ginParameters.forEach(param => {
                                 if (param.type == "struct") {
                                     let _state = findFuncInnerStateInPackage(modules, _moduleName, _codeIndex, invokeData, param.name);
                                     if (!_state) {
-                                        _state = param.name;
+                                        throw new Error("找不到" + param.name);
                                     } else {
                                         // TODO
                                         const structObj = parseStruct(modules[_moduleName].code[_codeIndex].content.slice(_state.begin + 1, _state.end));
-                                        _state = {};
-                                        Object.keys(param.obj).forEach(key => {
-                                            let _paramState = findFuncInnerStateInPackage(modules, _moduleName, _codeIndex, invokeData, param.obj[key]);
-                                            const jsonKey = structObj && structObj[key].json;
-                                            const comment = structObj && structObj[key].comment;
-                                            const type = structObj && structObj[key].type;
+                                        _state = [];
+                                        Object.keys(param.obj).forEach(name => {
+                                            let _paramState = findFuncInnerStateInPackage(modules, _moduleName, _codeIndex, invokeData, param.obj[name]);
+                                            const jsonKey = structObj && structObj[name].json;
+                                            const comment = structObj && structObj[name].comment;
+                                            const type = structObj && structObj[name].type;
                                             if (_paramState && _paramState.isParameter) {
-                                                _state[jsonKey || key] = "[value]：" + (invokeParameters[_paramState.order].type ?
-                                                    invokeParameters[_paramState.order]._objStr : invokeParameters[_paramState.order].name) + " [" + type + "]：" + comment;
+                                                _state.push({
+                                                    name,
+                                                    jsonKey,
+                                                    value: invokeParameters[_paramState.order].type ?
+                                                        (invokeParameters[_paramState.order].obj || invokeParameters[_paramState.order]._objStr) : invokeParameters[_paramState.order].name,
+                                                    type,
+                                                    comment
+                                                });
                                             } else {
-                                                _state[key] = "[value]：" + param.obj[key];
+                                                _state.push({ name, jsonKey, value: param.obj[name], type, comment });
                                             }
                                         })
 

@@ -4,7 +4,7 @@ const { parseHandle } = require("./handle");
 const { parseImportState } = require("./module");
 const fs = require("fs");
 
-const keyWords = ["GET", "POST", "PUT", "DELETE"];
+const keyWords = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"];
 
 
 // TODO 权限等中间层未解决
