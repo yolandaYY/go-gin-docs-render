@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const process = require("process");
 const { matchBlock } = require("./utils");
-const { parseVarState, parseConstState } = require("./type");
+const { parseVarState, parseConstState, parseParameter } = require("./type");
 
 
 function parseModule(code, filePath) {
@@ -30,6 +30,7 @@ function parseModule(code, filePath) {
     }
 }
 
+// TODO
 // 不支持map
 // 不支持 type name type
 // 不支持函数声明返回值是函数(括号问题未解决)
@@ -64,7 +65,12 @@ function parseState(code) {
 
             }
         }
-        const returnState = funcMatchResult[4];
+        const returnStr = funcMatchResult[4];
+        let returnsType = [returnStr];
+        if (returnStr && returnStr.match(/^\(.*\)$/)) {
+            returnsType = parseParameter(returnStr.slice(1, returnStr.length - 1)).map(it => it.name);
+        }
+        
         const contentBegin = funcMatchResult.index + funcMatchResult[0].length;
         const block = matchBlock(code, "{", "}", true, contentBegin);
         if (receive) {
@@ -75,14 +81,14 @@ function parseState(code) {
                     receiver[receiveResult[2]] = {};
                 }
                 receiver[receiveResult[2]][funcName] = {
-                    isParse: false, receiveName: receiveResult[1], parameter, returnState,
+                    isParse: false, receiveName: receiveResult[1], parameter, returnStr, returnsType,
                     begin: block.begin, end: block.end, name: funcName, type: "receiver"
                 }
 
             }
         } else {
             state[funcName] = {
-                type: "func", isParse: false, parameter, returnState,
+                type: "func", isParse: false, parameter, returnStr, returnsType,
                 begin: block.begin, end: block.end, name: funcName
             };
         }

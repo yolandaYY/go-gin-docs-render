@@ -15,8 +15,13 @@ function parseObject(str, startIndex) {
     }
 }
 
+// 仅支持包内导入modal
 // 结构体内部（不包括{}）
-function parseStruct(str) {
+function parseStruct(module, moduleName, codeIndex, state) {
+    if (state.isParse) return state.structState;
+
+    const str = module[moduleName].code[codeIndex].content.slice(state.begin + 1, state.end);
+
     const structData = {};
     str.split(/[;\n]/).forEach(line => {
         const commentResult = line.match(/`([^`]+)`\s*$/);
@@ -36,14 +41,26 @@ function parseStruct(str) {
                     structData[name] = {
                         type: typeResult[0].trim(),
                         comment: comment,
-                        json: jsonResult && jsonResult[1],
+                        jsonKey: jsonResult && jsonResult[1],
                     }
                 } else {
-                    structData[typeResult[0].trim()] = "IMPORT";
+                    const structName = typeResult[0].trim();
+                    const idx = findNameStateInPackage(module[moduleName].code, structName);
+                    if (~idx) {
+                        let _state = module[moduleName].code[idx].states[structName];
+                        if (_state) {
+                            // TODO 确定嵌入的model是否保留
+                            const structState = parseStruct(module, moduleName, idx, _state);
+                            structData[structName] = structState;
+                        }
+                    }
                 }
             })
         }
     });
+
+    state.structState = structData;
+    state.isParse = true;
     return structData;
 }
 
@@ -81,6 +98,7 @@ function parseVarState(str, noShortState) {
                             type: parseBasicType(values[i]),
                             value: values[i] || assigns[1],
                             index: block.begin,
+                            _stateIndex: i,
                         }
                     }
                 } else {
@@ -126,7 +144,8 @@ function parseVarState(str, noShortState) {
                 state[names[i]] = {
                     type: parseBasicType(values[i]),
                     value: values[i] || valueStr,
-                    index: result.index
+                    index: result.index,
+                    _stateIndex: i,
                 }
             }
         } else {
@@ -168,7 +187,9 @@ function parseVarState(str, noShortState) {
                     state[names[i]] = {
                         type: parseBasicType(values[i]),
                         value: values[i] || valueStr,
-                        index: result.index
+                        index: result.index,
+                        _stateIndex: i,
+
                     }
                 }
             } else {
@@ -214,7 +235,8 @@ function parseConstState(str) {
                     state[names[i]] = {
                         type: parseBasicType(values[i]),
                         value: values[i] || assigns[1],
-                        index: result.index
+                        index: result.index,
+                        _stateIndex: i,
                     }
                 }
 
@@ -245,6 +267,7 @@ function parseConstState(str) {
                     type: parseBasicType(values[i]),
                     value: values[i] || valueStr,
                     index: result.index,
+                    _stateIndex: i,
                 }
             }
         } else {
@@ -282,22 +305,51 @@ function parseClosure(str) {
         });
         closures.push({
             isParse: false,
+            type: "func closure",
             parameter,
-            returnState: funcMatchResult[2],
-            begin: block.begin, end: block.end
+            returnStr: funcMatchResult[2],
+            content: ";" + str.slice(block.begin + 1, block.end),
         });
         str = str.slice(0, funcMatchResult.index) + ClosureFlag + (closures.length - 1) + str.slice(block.end + 1);
     }
     return { closures, content: closures.length && str };
 }
 
-function parseFuncContent(str) {
+
+function parseFuncContent(content, begin, end) {
+    let str = content.slice(begin, end);
+
     const closuresData = parseClosure(str);
     str = closuresData.content || str;
     const varState = parseVarState(str);
     const constState = parseConstState(str);
 
-    return { state: Object.assign({}, varState, constState), closures: closuresData.closures };
+    return {
+        state: Object.assign({}, varState, constState),
+        closures: closuresData.closures,
+        content: content.slice(0, begin) + str + content.slice(end)
+    };
+}
+
+function parseFunc(state, codeData) {
+    if (state.isParse) return state.funcBlockData;
+
+    let funcBlockData;
+    if (state.type == "func closure") {
+        // TODO 未处理嵌套闭包
+        funcBlockData = parseFuncContent(state.content, 0, state.content.length);
+        state.content = funcBlockData.content;
+    } else {
+        funcBlockData = parseFuncContent(codeData.content, state.begin + 1, state.end);
+        // 替换上闭包映射的内容
+        codeData.content = funcBlockData.content;
+    }
+    delete funcBlockData.content;
+
+    state.isParse = true;
+    state.funcBlockData = funcBlockData;
+
+    return funcBlockData;
 }
 
 
@@ -324,6 +376,11 @@ function parseBasicType(value) {
         return "closure";
     }
     return undefined;
+}
+
+function isBasicType(type) {
+    const basicType = ["string", "int", "float", "bool", "struct", "map"];
+    return ~basicType.indexOf(type) || ~basicType.indexOf(type.replace(/^\[\s*\]/, ""));
 }
 
 
@@ -396,29 +453,57 @@ function findNameStateInImport(modules, moduleName, codeIndex, name, property) {
 
 
 /**
- * 返回被调用函数或结构体(TODO 添加返回值用于快速查找)
- * @param {string} modules 
+ * // TODO 没有和变量下标对于，在函数返回值大于1，对第一个位置之后的对象取值可能会出错
+ * 返回被调用变量(TODO 添加返回值用于快速查找)
+ * @param {any} modules 
  * @param {string} moduleName 
  * @param {number} codeIndex 
- * @param {any} funcBlockData 
- * @param {string} invokeState 
+ * @param {any} funcState 
+ * @param {string} targetState 
  * @returns
  */
-function invoke(modules, moduleName, codeIndex, funcName, invokeState) {
-    const result = invokeState.match(/([^\.\s{=]+)\.([^\(\{\s)]+)/);
-    if (!result) return;
+function findState(modules, moduleName, codeIndex, funcState, targetState, deep) {
+    if (targetState[0] == "*") {
+        targetState = targetState.slice(1);
+    }
+    const result = targetState.match(/([^\.\s{=]+)\.([^\(\{\s)]+)/);
+
+    const funcBlockData = funcState.funcBlockData;
+    let stateData;
+
+    // 单纯的变量，不包含结构体
+    if (!result) {
+
+        if (targetState.startsWith("_CLOSURE_INDEX_")) {
+            const index = parseInt(targetState.replace("_CLOSURE_INDEX_", ""));
+            if (~index) stateData = funcBlockData.closures[index];
+        } else {
+            stateData = findFuncInnerStateInPackage(modules, moduleName, codeIndex, funcState, targetState);
+        }
+
+        if (deep, stateData && !stateData.type && stateData.value) {
+            return findState(modules, moduleName, codeIndex, funcState, stateData.value, deep);
+        }
+
+        return stateData;
+    };
 
     const name = result[1];
     const property = result[2];
-    const funcState = modules[moduleName].code[codeIndex].states[funcName];
-    const funcBlockData = funcState.funcBlockData;
 
-    let stateData;
     // 函数内(TODO 只对结构体做处理) // TODO 结构体声明不一定和receiver在同一文件！！！
     if (funcBlockData.state[name] && funcBlockData.state[name].type == "struct") {
         const structData = funcBlockData.state[name].structData;
-        stateData = modules[structData.moduleName || moduleName].code[structData.codeIndex
-            == undefined ? codeIndex : structData.codeIndex].receiver[structData.name][property];
+        const _idx = structData.codeIndex == undefined ? codeIndex : structData.codeIndex;
+        stateData = modules[structData.moduleName || moduleName].code[_idx].receiver[structData.name][property];
+
+        if (deep && stateData && stateData.returnsType && stateData.returnsType[0]) {
+            // TODO 应当映射 stateIndex
+            if (!isBasicType(stateData.returnsType[0])) {
+                parseFunc(stateData, modules[structData.moduleName || moduleName].code[_idx]);
+                return findState(modules, structData.moduleName || moduleName, _idx, stateData, stateData.returnsType[0], true);
+            }
+        }
     }
     // 函数参数 (TODO !!! 参数要做类型连接)
     if (!stateData && funcState.parameter[name]) {
@@ -459,22 +544,30 @@ function invoke(modules, moduleName, codeIndex, funcName, invokeState) {
             stateData = findNameStateInImport(modules, moduleName, codeIndex, name, property);
         }
     }
+
     return stateData;
 }
 
+// !!! TODO 参数里包含函数调用，也会有传参
 // a.b(parameter)
 function parseParameter(str) {
     const structStack = [];
     const structRegexp = /([^,{]+){/g;
     while (1) {
         const result = structRegexp.exec(str);
+
         if (!result) break;
+
+        // 修复 interface{}
+        if (result[0].match(/map\s*\[[^\]]*\]\s*interface{/)) {
+            result.index += result[0].length;
+        }
 
         const pos = matchBlock(str, "{", "}", true, result.index);
         const _obj = parseObject(str, pos.begin);
-        const _objStr = str.slice(result.index, pos.end);
+        const _objStr = str.slice(result.index, pos.end + 1);
         str = str.slice(0, result.index) + "__STRUCT_STACK__" + structStack.length + str.slice(pos.end + 1);
-        const name = result[1].trim()
+        const name = result[1].trim();
         structStack.push({
             name,
             type: name.match(/map\[|gin\.H/) ? "map" : "struct",
@@ -482,10 +575,13 @@ function parseParameter(str) {
             _objStr,
         });
     }
-    
+
     const params = [];
-    
-    str.split(",").forEach(property => {
+
+    paramsResult = str.match(/[^,"'`]+|(["'`])[^"'`]*\1/g);
+    paramsResult.forEach(property => {
+        property = property.replace(/,$/, "");
+
         const _result = property.match(/__STRUCT_STACK__(\d+)/);
         if (_result) {
             params.push(structStack[_result[1]]);
@@ -495,21 +591,19 @@ function parseParameter(str) {
             })
         }
     })
-
     return params;
 
 }
-
 
 module.exports = {
     parseStruct,
     parseVarState,
     parseConstState,
     parseClosure,
-    parseFuncContent,
+    parseFunc,
     findNameByValue,
     parseObject,
-    invoke,
+    findState,
     parseParameter,
     findFuncInnerStateInPackage
 }

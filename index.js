@@ -4,7 +4,7 @@ const path = require("path");
 const { readAllGoFile } = require("./file");
 const { parseModule, parseState, parseImportState } = require("./module");
 const { removeCommentContent, matchBlock } = require("./utils");
-const { invoke, parseFuncContent, findNameByValue, parseObject } = require("./type");
+const { findState, parseFunc, findNameByValue, parseObject, parseParameter } = require("./type");
 const { parseRoute } = require("./router");
 
 
@@ -60,7 +60,7 @@ readAllGoFile(projectPath, excludePaths).then(files => {
 
     let mainPackage = null;
     let mainModuleName = "";
-    
+
     for (let moduleName in modules) {
         if (modules[moduleName].packageName == "main") {
             mainPackage = modules[moduleName];
@@ -80,31 +80,26 @@ readAllGoFile(projectPath, excludePaths).then(files => {
         const codeData = mainPackage.code[i];
         if (NET in codeData.importStates) {
             const packageName = codeData.importStates[NET] || "http";   // NET包引入的名称
-            // 规定main函数一定会声明一个变量存放server
+            // 规定main函数一定会声明server
             if (codeData.states.main) {
                 const mainFunc = codeData.states.main;
-                const funcBlockData = parseFuncContent(codeData.content.slice(mainFunc.begin, mainFunc.end));
-                mainFunc.isParse = true;
-                mainFunc.funcBlockData = funcBlockData;
+                const funcBlockData = parseFunc(mainFunc, codeData);
 
-                // 假设开始
+                // 假设在main函数 http.server 并 ListenAndServe 开启服务 TODO 端口
                 const server = findNameByValue(funcBlockData.state, `&${packageName}.Server`);
-                if (~codeData.content.indexOf(server.name + ".ListenAndServe")) {
+                if (server && ~codeData.content.indexOf(server.name + ".ListenAndServe")) {
                     const serverObj = parseObject(codeData.content, server.data.index);
                     if (serverObj.Handler && funcBlockData.state[serverObj.Handler]) {
                         const routerValue = funcBlockData.state[serverObj.Handler];
                         console.log(routerValue);
 
                         if (!routerValue.type) {    // TODO 同一函数内未处理
-                            const invokeData = invoke(modules, mainModuleName, i, "main", routerValue.value);
+                            const invokeData = findState(modules, mainModuleName, i, mainFunc, routerValue.value);
                             if (invokeData) {
-                                if (invokeData.type == "func" && invokeData.returnState == "*gin.Engine") {
+                                if (invokeData.type.startsWith("func") && invokeData.returnStr == "*gin.Engine") {
                                     const _moduleName = invokeData.moduleName || mainModuleName;
                                     const _codeIndex = invokeData.codeIndex == undefined ? i : invokeData.codeIndex;
-                                    if (!invokeData.isParse) {
-                                        invokeData.funcBlockData = parseFuncContent(modules[_moduleName].code[_codeIndex].content.slice(invokeData.begin + 1, invokeData.end));
-                                        invokeData.isParse = true;
-                                    }
+                                    parseFunc(invokeData, modules[_moduleName].code[_codeIndex])
                                     invokeData.moduleName && parseImportState(modules, modules[invokeData.moduleName].code);
                                     parseRoute(modules, _moduleName, _codeIndex, invokeData);
                                 }
@@ -113,6 +108,23 @@ readAllGoFile(projectPath, excludePaths).then(files => {
                         }
                         // TODO
                     }
+
+                    // 假设在main函数利用gin.Default或gin.New声明路由，并开启服务
+                } else if (GIN in codeData.importStates) {
+                    const name = codeData.importStates[GIN] || "gin";
+
+                    function serverMatch(key) {
+                        const server = findNameByValue(funcBlockData.state, name + key);
+                        const serverRunIndex = codeData.content.indexOf(server.name + ".Run");
+
+                        if (server && server.name && ~serverRunIndex) {
+                            const runParamPos = matchBlock(codeData.content, "(", ")", true, serverRunIndex);
+                            const runParams = parseParameter(codeData.content.slice(runParamPos.begin + 1, runParamPos.end));
+                            parseRoute(modules, mainModuleName, i, codeData.states.main, server.name, runParams[0] && runParams[0].name);
+                        }
+                    }
+
+                    serverMatch(".Default")
                 }
 
                 break;
