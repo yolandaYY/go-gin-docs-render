@@ -12,7 +12,7 @@
 
 
 # 输出示例
-对 github.com/EDDYCJY/go-gin-example 项目进行解析的部分输出如下
+对 https://github.com/eddycjy/go-gin-example 项目进行解析的部分输出如下
 
 ## markdown 文件
 
@@ -65,7 +65,7 @@
 
 ## json 文件
 
-``` json
+``` jsonc
 [
   {
     "port": 8080    // 服务器端口
