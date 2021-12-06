@@ -32,26 +32,44 @@ function parseStruct(module, moduleName, codeIndex, state) {
         if (typeResult) {
             line = line.slice(0, typeResult.index);
             line = line.replace(/\s+/g, "");
+            const type = typeResult[0].trim();
             line.split(",").forEach(name => {
                 // 包之间的结构体引用
                 if (name) {
                     let comment = commentResult && commentResult[1].trim();
-                    const jsonResult = comment && comment.match(/json\s*:\s*"([^"]+)"/)
-                    comment = (comment || "").replace(jsonResult && jsonResult[0], "")
+                    const jsonResult = comment && comment.match(/json\s*:\s*"([^"]+)"/);
+                    comment = (comment || "").replace(jsonResult && jsonResult[0], "");
+
                     structData[name] = {
-                        type: typeResult[0].trim(),
-                        comment: comment,
+                        type,
+                        comment: comment.replace(/"/g, ""),
                         jsonKey: jsonResult && jsonResult[1],
                     }
+
+                    if (type && !isBasicType(type)) {
+                        const idx = findNameStateInPackage(module[moduleName].code, type);
+                        if (~idx) {
+                            let _state = module[moduleName].code[idx].states[type];
+                            if (_state) {
+                                const structState = parseStruct(module, moduleName, idx, _state);
+                                if (structState) {
+                                    structData[name].value = structState;
+                                }
+                            }
+                        }
+                    }
+
                 } else {
-                    const structName = typeResult[0].trim();
-                    const idx = findNameStateInPackage(module[moduleName].code, structName);
+                    const idx = findNameStateInPackage(module[moduleName].code, type);
                     if (~idx) {
-                        let _state = module[moduleName].code[idx].states[structName];
+                        let _state = module[moduleName].code[idx].states[type];
                         if (_state) {
                             // TODO 确定嵌入的model是否保留
                             const structState = parseStruct(module, moduleName, idx, _state);
-                            structData[structName] = structState;
+                            if (structState) {
+                                Object.assign(structData, structState);
+                            }
+
                         }
                     }
                 }
@@ -579,7 +597,7 @@ function parseParameter(str) {
     const params = [];
 
     paramsResult = str.match(/[^,"'`]+|(["'`])[^"'`]*\1/g);
-    paramsResult.forEach(property => {
+    paramsResult && paramsResult.forEach(property => {
         property = property.replace(/,$/, "");
 
         const _result = property.match(/__STRUCT_STACK__(\d+)/);

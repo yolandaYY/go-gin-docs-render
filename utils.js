@@ -13,7 +13,7 @@ const requestMapper = {
     ShouldBindQuery: "QueryString",
     FormFile: "单文件",
     MultipartForm: "多文件",
-    "Request.FormFile": "",
+    "Request.FormFile": "Form",
 }
 
 

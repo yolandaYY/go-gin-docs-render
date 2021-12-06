@@ -8,13 +8,13 @@ const keyWords = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"];
 
 
 // TODO 权限等中间层未解决
-function parseRoute(modules, moduleName, codeIndex, stateData, routeVarName, port) {
+function parseRoute(modules, moduleName, codeIndex, stateData, routeVarName) {
     let content = modules[moduleName].code[codeIndex].content.slice(stateData.begin, stateData.end + 1);
     let routerName = routeVarName;
     
     if (!routeVarName) {
         const returnResult = content.match(/return\s+([^}]+)}\s*$/);
-        if (!returnResult) return;
+        if (!returnResult) return {};
 
         routerName = returnResult[1].trim();
     }
@@ -69,13 +69,8 @@ function parseRoute(modules, moduleName, codeIndex, stateData, routeVarName, por
         }
 
     }
-    
 
-    if (port) {
-        router.unshift({ port });
-    }
-
-    fs.writeFileSync(__dirname + "//2.json", JSON.stringify(router, null, 2));
+    return router;
 }
 
 module.exports = {
